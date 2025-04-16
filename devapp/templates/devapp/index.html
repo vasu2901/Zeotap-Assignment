@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Data Ingestion UI</title>
+</head>
+
+<body>
+    <h2>ClickHouse Settings</h2>
+    Host: <input id="host"><br>
+    Port: <input id="port" value="8443"><br>
+    DB: <input id="database"><br>
+    User: <input id="user"><br>
+    Password: <input id="jwt" type="password"><br>
+    <button onclick="connectClickhouse()">Connect & Load Tables</button>
+    <br><br>
+
+    <h3>Tables</h3>
+    <select id="tables" onchange="loadColumns()"></select><br>
+    <div id="columns"></div>
+    <button onclick="startIngestion()">Ingest → CSV</button>
+    <p id="status"></p>
+
+    <hr>
+    <h2>Flat File Upload</h2>
+    <form id="uploadForm" enctype="multipart/form-data">
+        File: <input type="file" name="file" id="file">
+        Delimiter: <input id="delimiter" value=",">
+        <button type="submit">Upload</button>
+    </form>
+    <div id="file-status"></div>
+    <div id="flat-columns"></div>
+    <button onclick="previewFlatfile()">Preview</button>
+    <button onclick="ingestFlatfile()">Ingest to ClickHouse</button>
+
+    <script>
+        async function connectClickhouse() {
+            const data = {
+                host: host.value,
+                database: database.value,
+                user: user.value,
+                jwt: jwt.value
+            };
+
+            const res = await fetch('/connect/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const r = await res.json();
+            if (r.status === 'success') {
+                status.textContent = "Connected!";
+                // Auto-populate tables if returned from backend
+                if (r.tables) {
+                    const tables = document.getElementById('tables');
+                    tables.innerHTML = '';
+                    r.tables.forEach(t => {
+                        tables.innerHTML += `<option value="${t}">${t}</option>`;
+                    });
+                    loadColumns(); // Auto-load columns for first table
+                }
+            } else {
+                status.textContent = r.message;
+            }
+        }
+
+        async function loadTables() {
+            const data = {
+                source_type: 'clickhouse',
+                host: host.value,
+                port: port.value,
+                database: database.value,
+                user: user.value,
+                jwt: jwt.value
+            };
+
+            const res = await fetch('/schema/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const r = await res.json();
+            const tables = document.getElementById('tables');
+            tables.innerHTML = '';
+            r.tables.forEach(t => {
+                tables.innerHTML += `<option value="${t}">${t}</option>`;
+            });
+        }
+
+        async function loadColumns() {
+            const data = {
+                source_type: 'clickhouse',
+                host: host.value,
+                port: port.value,
+                database: database.value,
+                user: user.value,
+                jwt: jwt.value,
+                table: tables.value
+            };
+
+            const res = await fetch('/schema/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const r = await res.json();
+            columns.innerHTML = r.columns.map(col =>
+                `<label><input type="checkbox" name="col" value="${col}">${col}</label><br>`
+            ).join('');
+        }
+
+        async function startIngestion() {
+            const selected = [...document.querySelectorAll('input[name=col]:checked')].map(cb => cb.value);
+            console.log(selected)
+            const data = {
+                direction: 'clickhouse_to_file',
+                host: host.value,
+                port: port.value,
+                database: database.value,
+                user: user.value,
+                jwt: jwt.value,
+                table: tables.value,
+                columns: selected,
+                output_path: 'output.csv'
+            };
+
+            const res = await fetch('/ingest/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const r = await res.json();
+
+            if (r.status === 'success') {
+                status.innerHTML = `
+            ✅ ${r.message}<br>
+            📁 Output: <strong>output.csv</strong><br>
+            📊 Columns: <em>${r.columns.join(', ')}</em>
+        `;
+            } else {
+                status.textContent = r.message;
+            }
+        }
+
+        let flatFilePath = "";
+
+        uploadForm.addEventListener("submit", async e => {
+            e.preventDefault();
+
+            const formData = new FormData(uploadForm);
+            const res = await fetch('/upload/', { method: 'POST', body: formData });
+            const r = await res.json();
+
+            if (r.status === 'success') {
+                flatFilePath = r.filepath;
+                document.getElementById("file-status").textContent = "Uploaded!";
+
+                const schemaRes = await fetch('/schema/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_type: 'flatfile',
+                        filepath: flatFilePath,
+                        delimiter: delimiter.value
+                    })
+                });
+
+                const schema = await schemaRes.json();
+                document.getElementById("flat-columns").innerHTML = schema.columns.map(col =>
+                    `<label><input type="checkbox" name="flatcol" value="${col}">${col}</label><br>`
+                ).join('');
+            } else {
+                document.getElementById("file-status").textContent = r.message;
+            }
+        });
+
+        async function previewFlatfile() {
+            const selected = [...document.querySelectorAll('input[name=flatcol]:checked')].map(cb => cb.value);
+            const res = await fetch('/preview-flatfile/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filepath: flatFilePath,
+                    columns: selected,
+                    delimiter: delimiter.value
+                })
+            });
+
+            const r = await res.json();
+            alert("Preview: " + JSON.stringify(r.preview));
+        }
+
+        async function ingestFlatfile() {
+            const selected = [...document.querySelectorAll('input[name=flatcol]:checked')].map(cb => cb.value);
+            const tableName = prompt("Enter destination ClickHouse table name:");
+
+            const res = await fetch('/ingest/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    direction: 'file_to_clickhouse',
+                    filepath: flatFilePath,
+                    columns: selected,
+                    delimiter: delimiter.value,
+                    host: host.value,
+                    port: port.value,
+                    database: database.value,
+                    user: user.value,
+                    jwt: jwt.value,
+                    table_name: tableName
+                })
+            });
+
+            const r = await res.json();
+            status.textContent = r.records ? `Flat file ingested: ${r.records}` : r.message;
+        }
+    </script>
+</body>
+
+</html>

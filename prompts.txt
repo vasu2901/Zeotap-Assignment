@@ -1,0 +1,11 @@
+Prompt 1:
+I built a Django app to connect to ClickHouse and upload CSVs. Help me implement ingestion from ClickHouse to a flat file.
+
+Prompt 2:
+I’ve written the backend functions. Just need help modifying the HTML to display tables and columns properly after connect.
+
+Prompt 3:
+Now I want it to show a message like “Your table has been downloaded to CSV” after ingestion. I’ve written the ingestion logic.
+
+Prompt 4:
+Getting this error: `InvalidChunkLength` when reading data. Any idea why this happens and how to fix it?
